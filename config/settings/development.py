@@ -45,30 +45,30 @@ from .base import *
 #     }
 # }
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'railway',
-#         'USER': 'postgres',
-#         'PASSWORD': 'nokbbbXgIDvLZYDXpOEnOpOblnuxibOu',
-#         'HOST': 'maglev.proxy.rlwy.net',  
-#         'PORT': '25499',
-#         'CONN_MAX_AGE': 300,
-#     }
-# }
-
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'railway',
         'USER': 'postgres',
-        'PASSWORD': 'eBHXWpcVbIYZdGFgbdrnCgHcTgNLadVY',
-        'HOST': 'gondola.proxy.rlwy.net',  
-        'PORT': '38488',
+        'PASSWORD': 'nokbbbXgIDvLZYDXpOEnOpOblnuxibOu',
+        'HOST': 'maglev.proxy.rlwy.net',  
+        'PORT': '25499',
         'CONN_MAX_AGE': 300,
     }
 }
+
+
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'railway',
+#         'USER': 'postgres',
+#         'PASSWORD': 'eBHXWpcVbIYZdGFgbdrnCgHcTgNLadVY',
+#         'HOST': 'gondola.proxy.rlwy.net',  
+#         'PORT': '38488',
+#         'CONN_MAX_AGE': 300,
+#     }
+# }
 
 
 
