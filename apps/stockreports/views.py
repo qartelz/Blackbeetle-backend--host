@@ -19,7 +19,7 @@ class StockReportViewSet(viewsets.ModelViewSet):
     """
     queryset = StockReport.objects.all().order_by('-date_created')
     serializer_class = StockReportSerializer
-    permission_classes = [IsAdminUser]
+    # permission_classes = [IsAdminUser]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
@@ -205,3 +205,34 @@ class StockReportDeleteView(generics.DestroyAPIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+import requests
+from django.http import StreamingHttpResponse, HttpResponseBadRequest
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET
+from urllib.parse import unquote
+
+@csrf_exempt
+@require_GET
+def proxy_pdf(request):
+    # Get the 'url' query parameter
+    file_url = request.GET.get('url')
+    if not file_url:
+        return HttpResponseBadRequest("Missing 'url' query parameter.")
+
+    file_url = unquote(file_url)  # Decode URL-encoded strings if any
+
+    try:
+        resp = requests.get(file_url, stream=True)
+        if resp.status_code != 200:
+            return StreamingHttpResponse(f'Failed to fetch PDF. Status code: {resp.status_code}', status=resp.status_code)
+
+        response = StreamingHttpResponse(
+            resp.iter_content(chunk_size=8192),
+            content_type='application/pdf'
+        )
+        # You can customize the filename here if you want
+        response['Content-Disposition'] = 'attachment; filename="Report.pdf"'
+        response['Access-Control-Allow-Origin'] = '*'  # Adjust for your frontend domain if needed
+        return response
+    except requests.RequestException as e:
+        return StreamingHttpResponse(f'Error fetching PDF: {e}', status=500)
