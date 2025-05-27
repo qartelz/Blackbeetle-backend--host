@@ -29,6 +29,8 @@ class Plan(BaseModel):
         ('BASIC', 'Basic'),
         ('PREMIUM', 'Premium'),
         ('SUPER_PREMIUM', 'Super Premium'),
+        ('FREE_TRIAL', 'Free Trial'),
+
     ]
     
     name = models.CharField(max_length=30,choices=PLAN_TYPE)
