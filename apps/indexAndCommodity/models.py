@@ -19,7 +19,6 @@ class IndexAndCommodity(models.Model):
 
     tradingSymbol = models.CharField(
         max_length=50, 
-        unique=True,
         help_text="Index trading symbol",
         db_index=True,
         editable=False,

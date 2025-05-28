@@ -11,9 +11,14 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from apps.trades.routing import websocket_urlpatterns as trade_websocket_urlpatterns
 from apps.notifications.routing import websocket_urlpatterns as notification_websocket_urlpatterns
+from apps.indexAndCommodity.routing import websocket_urlpatterns as index_commodity_websocket_urlpatterns
 from core.middleware import JWTAuthMiddleware
 
-combined_websocket_patterns = trade_websocket_urlpatterns + notification_websocket_urlpatterns
+combined_websocket_patterns = (
+    trade_websocket_urlpatterns + 
+    notification_websocket_urlpatterns + 
+    index_commodity_websocket_urlpatterns
+)
 
 # Define the application
 application = ProtocolTypeRouter({

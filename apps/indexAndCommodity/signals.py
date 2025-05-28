@@ -9,6 +9,96 @@ from decimal import Decimal
 from .models import Trade, TradeHistory,Analysis,Insight
 from apps.notifications.models import Notification
 from django.db import DatabaseError
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TradeUpdateBroadcaster:
+    """Handles broadcasting trade updates through WebSocket."""
+    
+    @staticmethod
+    def prepare_trade_data(trade):
+        """Prepare trade data for WebSocket broadcast."""
+        try:
+            # Only prepare data for ACTIVE and COMPLETED trades
+            if trade.status not in ['ACTIVE', 'COMPLETED']:
+                logger.info(f"Skipping trade data preparation for trade ID: {trade.id} with status: {trade.status}")
+                return None
+                
+            logger.info(f"Preparing trade data for trade ID: {trade.id}, Status: {trade.status}")
+            message_type = "trade_completed" if trade.status == 'COMPLETED' else "trade_update"
+            
+            data = {
+                "trade_id": trade.id,
+                "action": "updated",
+                "message_type": message_type,
+                "trade_status": trade.status,
+                "plan_type": trade.plan_type,
+                "update_type": "index_and_commodity",
+                "timestamp": timezone.now().isoformat(),
+                "index_and_commodity": {
+                    "id": trade.index_and_commodity.id,
+                    "symbol": trade.index_and_commodity.tradingSymbol,
+                    "name": trade.index_and_commodity.instrumentName
+                },
+                "trade_type": trade.trade_type,
+                "warzone": str(trade.warzone),
+                "image": trade.image.url if trade.image else None
+            }
+            logger.info(f"Successfully prepared trade data: {data}")
+            return data
+        except Exception as e:
+            logger.error(f"Error preparing trade data: {str(e)}")
+            return None
+
+    @staticmethod
+    def broadcast_trade_update(trade):
+        """Broadcast trade update through WebSocket."""
+        try:
+            logger.info(f"Starting trade update broadcast for trade ID: {trade.id}")
+            
+            # Only broadcast ACTIVE and COMPLETED trades
+            if trade.status not in ['ACTIVE', 'COMPLETED']:
+                logger.info(f"Skipping broadcast for trade ID: {trade.id} with status: {trade.status}")
+                return
+                
+            channel_layer = get_channel_layer()
+            if not channel_layer:
+                logger.error("No channel layer available")
+                return
+
+            trade_data = TradeUpdateBroadcaster.prepare_trade_data(trade)
+            if not trade_data:
+                logger.error("No trade data prepared for broadcast")
+                return
+            
+            # Get all active subscriptions that should receive this update
+            from apps.subscriptions.models import Subscription
+            today = timezone.now().date()
+            
+            subscriptions = Subscription.objects.filter(
+                is_active=True,
+                end_date__gte=today
+            ).select_related('user')
+            
+            logger.info(f"Found {subscriptions.count()} active subscriptions to broadcast to")
+            
+            # Broadcast to each eligible user's channel
+            for subscription in subscriptions:
+                user_group = f"trade_updates_{subscription.user.id}"
+                logger.info(f"Broadcasting to user group: {user_group}")
+                async_to_sync(channel_layer.group_send)(
+                    user_group,
+                    {
+                        "type": "trade_update",
+                        "data": trade_data
+                    }
+                )
+            logger.info("Successfully completed broadcasting trade update")
+        except Exception as e:
+            logger.error(f"Error broadcasting trade update: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
 class NotificationManager:
     @staticmethod
@@ -17,7 +107,8 @@ class NotificationManager:
         plan_hierarchy = {
             'BASIC': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM'],
             'PREMIUM': ['PREMIUM', 'SUPER_PREMIUM'],
-            'SUPER_PREMIUM': ['SUPER_PREMIUM']
+            'SUPER_PREMIUM': ['SUPER_PREMIUM'],
+            'FREE_TRIAL': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM']
         }
         return plan_hierarchy.get(plan_type, [])
 
@@ -120,7 +211,9 @@ class NotificationManager:
 
 @receiver(post_save, sender=Trade)
 def handle_trade_updates(sender, instance, created, **kwargs):
-    """Handle all trade-related notifications"""
+    """Handle all trade-related notifications and WebSocket updates"""
+    
+    logger.info(f"Trade signal received - ID: {instance.id}, Status: {instance.status}, Created: {created}")
     
     # Skip if no relevant fields changed
     if not any([
@@ -128,13 +221,21 @@ def handle_trade_updates(sender, instance, created, **kwargs):
         instance.tracker.has_changed('image'),
         instance.tracker.has_changed('warzone')
     ]):
+        logger.info("No relevant fields changed, skipping updates")
         return
         
     notifications = []
     
+    # Only process ACTIVE and COMPLETED trades
+    if instance.status not in ['ACTIVE', 'COMPLETED']:
+        logger.info(f"Skipping updates for trade with status: {instance.status}")
+        return
+    
     # Status change notifications
     if instance.tracker.has_changed('status'):
+        logger.info(f"Status changed to: {instance.status}")
         if instance.status == 'ACTIVE':
+            logger.info("Trade activated, creating notification")
             notifications.extend(
                 NotificationManager.create_notification(
                     instance,
@@ -144,6 +245,7 @@ def handle_trade_updates(sender, instance, created, **kwargs):
                 )
             )
         elif instance.status == 'COMPLETED':
+            logger.info("Trade completed, creating notification")
             notifications.extend(
                 NotificationManager.create_notification(
                     instance,
@@ -152,9 +254,14 @@ def handle_trade_updates(sender, instance, created, **kwargs):
                     f"Trade for {instance.index_and_commodity.tradingSymbol} has been completed"
                 )
             )
+            
+        # Broadcast trade update through WebSocket when status changes
+        logger.info("Scheduling WebSocket broadcast for status change")
+        transaction.on_commit(lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance))
     
     # Image update notifications (only for active trades)
     if instance.status == 'ACTIVE' and instance.tracker.has_changed('image'):
+        logger.info("Image updated for active trade")
         notifications.extend(
             NotificationManager.create_notification(
                 instance,
@@ -163,9 +270,13 @@ def handle_trade_updates(sender, instance, created, **kwargs):
                 "Technical analysis chart has been updated"
             )
         )
+        # Broadcast trade update for image changes
+        logger.info("Scheduling WebSocket broadcast for image update")
+        transaction.on_commit(lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance))
     
     # Warzone update notifications (only for active trades)
     if instance.status == 'ACTIVE' and instance.tracker.has_changed('warzone'):
+        logger.info("Warzone updated for active trade")
         notifications.extend(
             NotificationManager.create_notification(
                 instance,
@@ -174,9 +285,13 @@ def handle_trade_updates(sender, instance, created, **kwargs):
                 f"Risk level has changed to {instance.warzone}"
             )
         )
+        # Broadcast trade update for warzone changes
+        logger.info("Scheduling WebSocket broadcast for warzone update")
+        transaction.on_commit(lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance))
     
     # Send all notifications
     if notifications:
+        logger.info(f"Scheduling {len(notifications)} notifications to be sent")
         transaction.on_commit(
             lambda: NotificationManager.send_websocket_notifications(notifications)
         )
@@ -249,132 +364,3 @@ def handle_insight_updates(sender, instance, created, **kwargs):
             transaction.on_commit(
                 lambda: NotificationManager.send_websocket_notifications(notifications)
             )
-
-
-
-
-
-# from django.db.models.signals import post_save
-# from django.dispatch import receiver
-# from django.utils import timezone
-# from django.db.models import Q
-# from channels.layers import get_channel_layer
-# from asgiref.sync import async_to_sync
-# from typing import List
-
-# from apps.notifications.models import Notification
-# from apps.subscriptions.models import Subscription
-# from .models import Trade
-# from django.contrib.contenttypes.models import ContentType
-# from django.db import transaction
-
-# class TradeUpdateManager:
-#     @staticmethod
-#     def get_plan_levels(plan_type: str) -> List[str]:
-#         """
-#         Returns list of plan levels that can access trades of given plan type
-#         Implements hierarchical access control
-#         """
-#         plan_access = {
-#             'BASIC': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM'],
-#             'PREMIUM': ['PREMIUM', 'SUPER_PREMIUM'],
-#             'SUPER_PREMIUM': ['SUPER_PREMIUM']
-#         }
-#         return plan_access.get(plan_type, [])
-
-# @receiver(post_save, sender=Trade)
-# def handle_trade_update(sender, instance, created, **kwargs):
-#     if not created and instance.status in ["ACTIVE", "COMPLETED"]:
-#         # Check if status has changed
-#         if hasattr(instance, 'tracker') and instance.tracker.has_changed('status'):
-#             transaction.on_commit(lambda: process_trade_update(instance))
-
-# def process_trade_update(trade):
-#     print('---------------------------------------------------notifications------------------------------------------')
-#     notifications = create_trade_notifications(trade)
-#     if notifications:
-#         send_websocket_notifications(trade, notifications)
-
-
-# def create_trade_notifications(trade) -> List[Notification]:
-#     today = timezone.now().date()
-    
-#     # Get distinct users with active subscriptions
-#     user_ids = Subscription.objects.filter(
-#         Q(end_date__gte=today) &
-#         Q(is_active=True) &
-#         Q(plan__name__in=TradeUpdateManager.get_plan_levels(trade.plan_type))
-#     ).values_list('user_id', flat=True).distinct()
-
-#     if not user_ids:
-#         return []
-#     print(user_ids,'---------------------------------------------------user_ids------------------------------------------')
-
-#     short_message = f"New trade alert for {trade.index_and_commodity}" if trade.status == "ACTIVE" else f"Trade completed: {trade.index_and_commodity}"
-#     related_url = f"/trades/{trade.id}"
-#     trade_content_type = ContentType.objects.get_for_model(Trade)
-#     trade_data = {
-#                     'company': trade.index_and_commodity.tradingSymbol,
-#                     'plan_type': trade.plan_type,
-#                     'status': trade.status,
-#                     'instrumentName': trade.index_and_commodity.instrumentName,
-#                     'trade_id': trade.id,
-#                     'category': 'index_and_commodity',
-#                 }
-
-#     print(trade_content_type,'---------------------------------------------------trade_content_type------------------------------------------')
-
-#     # Fetch users in one query
-#     from django.contrib.auth import get_user_model
-#     User = get_user_model()
-#     users = User.objects.filter(id__in=user_ids)
-
-#     notifications = Notification.objects.bulk_create([
-#         Notification(
-#             recipient=user,
-#             notification_type='TRADE',
-#             content_type=trade_content_type,
-#             object_id=trade.id,
-#             short_message=short_message,
-#             related_url=related_url,
-#             trade_data=trade_data
-#         ) for user in users
-#     ])
-
-#     return notifications
-
-# def send_websocket_notifications(trade, notifications: List[Notification]):
-#     """
-#     Sends websocket notifications to all recipients.
-#     Uses the notification objects to ensure consistency with DB records.
-#     """
-#     channel_layer = get_channel_layer()
-
-#     # Group notifications by recipient for efficient websocket messaging
-#     for notification in notifications:
-#         # Prepare notification payload
-#         payload = {
-#             'type': 'new_notification',
-#             'message': {
-#                 'id': str(notification.id),  # Assuming UUID field
-#                 'type': notification.notification_type,
-#                 'short_message': notification.short_message,
-#                 'created_at': notification.created_at.isoformat(),
-#                 'icon': notification.notification_icon,
-#                 'related_url': notification.related_url,
-#                'trade_data': {
-#                     'company': trade.index_and_commodity.tradingSymbol,
-#                     'plan_type': trade.plan_type,
-#                     'status': trade.status,
-#                     'instrumentName': trade.index_and_commodity.instrumentName,
-#                     'trade_id': trade.id,
-#                     'category': 'index_and_commodity',
-#                 }
-#             }
-#         }
-
-#         # Send to user's notification channel
-#         async_to_sync(channel_layer.group_send)(
-#             f"notification_updates_{notification.recipient.id}",
-#             payload
-#         )

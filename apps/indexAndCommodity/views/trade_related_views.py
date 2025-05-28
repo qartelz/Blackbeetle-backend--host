@@ -12,10 +12,11 @@ from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError 
 from ..Filter.index_and_commodity_filter import TradeFilter
+from django.db.models import Q
 User = get_user_model()
 
 class CustomTradePagination(PageNumberPagination):
-    page_size = 5
+    page_size = 20  # Changed from 100 to 20 as default
     page_size_query_param = 'page_size'
     max_page_size = 100
 
@@ -32,10 +33,40 @@ class TradeViewSet(viewsets.ModelViewSet):
     filterset_class = TradeFilter
 
     def get_queryset(self):
-        return self.queryset.filter(
-            user=self.request.user,
-            status__in=['PENDING', 'ACTIVE', 'COMPLETED']
-        ).exclude(status='CANCELLED').order_by('-created_at')
+        queryset = self.queryset
+        
+        # Apply status filter if provided
+        status = self.request.query_params.get('status')
+        if status:
+            queryset = queryset.filter(status=status)
+        else:
+            # If no status filter, show all except cancelled
+            queryset = queryset.exclude(status='CANCELLED')
+            
+        # Apply trade type filter if provided
+        trade_type = self.request.query_params.get('trade_type')
+        if trade_type:
+            queryset = queryset.filter(trade_type=trade_type)
+            
+        # Apply plan type filter if provided
+        plan_type = self.request.query_params.get('plan_type')
+        if plan_type:
+            queryset = queryset.filter(plan_type=plan_type)
+            
+        # Apply exchange filter if provided
+        exchange = self.request.query_params.get('exchange')
+        if exchange:
+            queryset = queryset.filter(index_and_commodity__exchange=exchange)
+            
+        # Apply search filter if provided
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(index_and_commodity__tradingSymbol__icontains=search) |
+                Q(index_and_commodity__exchange__icontains=search)
+            )
+            
+        return queryset.order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
         try:
