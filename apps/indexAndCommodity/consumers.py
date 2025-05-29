@@ -546,7 +546,7 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
                     return
                 
                 # Check if this is a new trade
-                trade_timestamp = timezone.datetime.fromisoformat(trade_data['timestamp'])
+                trade_timestamp = timezone.datetime.fromisoformat(trade_data['created_at'])
                 is_new_trade = trade_timestamp >= self.subscription.start_date
                 
                 # Check if we can add this trade

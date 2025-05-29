@@ -35,7 +35,7 @@ class TradeUpdateBroadcaster:
                 "trade_status": trade.status,
                 "plan_type": trade.plan_type,
                 "update_type": "index_and_commodity",
-                "timestamp": timezone.now().isoformat(),
+                "created_at": trade.created_at.isoformat(),
                 "index_and_commodity": {
                     "id": trade.index_and_commodity.id,
                     "symbol": trade.index_and_commodity.tradingSymbol,
@@ -216,7 +216,7 @@ def handle_trade_updates(sender, instance, created, **kwargs):
     logger.info(f"Trade signal received - ID: {instance.id}, Status: {instance.status}, Created: {created}")
     
     # Skip if no relevant fields changed
-    if not any([
+    if not created and not any([
         instance.tracker.has_changed('status'),
         instance.tracker.has_changed('image'),
         instance.tracker.has_changed('warzone')
@@ -231,9 +231,9 @@ def handle_trade_updates(sender, instance, created, **kwargs):
         logger.info(f"Skipping updates for trade with status: {instance.status}")
         return
     
-    # Status change notifications
-    if instance.tracker.has_changed('status'):
-        logger.info(f"Status changed to: {instance.status}")
+    # Always broadcast when a trade becomes ACTIVE or COMPLETED
+    if created or instance.tracker.has_changed('status'):
+        logger.info(f"Status changed or new trade created with status: {instance.status}")
         if instance.status == 'ACTIVE':
             logger.info("Trade activated, creating notification")
             notifications.extend(
@@ -255,8 +255,8 @@ def handle_trade_updates(sender, instance, created, **kwargs):
                 )
             )
             
-        # Broadcast trade update through WebSocket when status changes
-        logger.info("Scheduling WebSocket broadcast for status change")
+        # Broadcast trade update through WebSocket when status changes or new trade
+        logger.info("Scheduling WebSocket broadcast for status change or new trade")
         transaction.on_commit(lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance))
     
     # Image update notifications (only for active trades)
