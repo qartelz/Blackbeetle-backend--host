@@ -10,6 +10,7 @@ from .models import Trade, TradeHistory,Analysis,Insight
 from apps.notifications.models import Notification
 from django.db import DatabaseError
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +29,98 @@ class TradeUpdateBroadcaster:
             logger.info(f"Preparing trade data for trade ID: {trade.id}, Status: {trade.status}")
             message_type = "trade_completed" if trade.status == 'COMPLETED' else "trade_update"
             
-            data = {
-                "trade_id": trade.id,
-                "action": "updated",
-                "message_type": message_type,
-                "trade_status": trade.status,
-                "plan_type": trade.plan_type,
-                "update_type": "index_and_commodity",
-                "created_at": trade.created_at.isoformat(),
-                "index_and_commodity": {
-                    "id": trade.index_and_commodity.id,
-                    "symbol": trade.index_and_commodity.tradingSymbol,
-                    "name": trade.index_and_commodity.instrumentName
-                },
-                "trade_type": trade.trade_type,
-                "warzone": str(trade.warzone),
-                "image": trade.image.url if trade.image else None
+            # Get analysis data - ensure it's never null
+            analysis_data = {
+                'bull_scenario': "",
+                'bear_scenario': "",
+                'status': 'NEUTRAL',
+                'completed_at': None,
+                'created_at': trade.created_at.isoformat(),
+                'updated_at': trade.created_at.isoformat()
             }
+            
+            if hasattr(trade, 'index_and_commodity_analysis') and trade.index_and_commodity_analysis:
+                analysis = trade.index_and_commodity_analysis
+                analysis_data.update({
+                    'bull_scenario': analysis.bull_scenario or "",
+                    'bear_scenario': analysis.bear_scenario or "",
+                    'status': analysis.status,
+                    'completed_at': analysis.completed_at.isoformat() if analysis.completed_at else None,
+                    'created_at': analysis.created_at.isoformat(),
+                    'updated_at': analysis.updated_at.isoformat()
+                })
+
+            # Get trade history
+            trade_history = []
+            for history in trade.index_and_commodity_history.all():
+                trade_history.append({
+                    'buy': str(history.buy),
+                    'target': str(history.target),
+                    'sl': str(history.sl),
+                    'timestamp': history.timestamp.isoformat(),
+                    'risk_reward_ratio': str(history.risk_reward_ratio),
+                    'potential_profit_percentage': str(history.potential_profit_percentage),
+                    'stop_loss_percentage': str(history.stop_loss_percentage)
+                })
+
+            # Get insight data
+            insight_data = None
+            if hasattr(trade, 'index_and_commodity_insight') and trade.index_and_commodity_insight:
+                insight = trade.index_and_commodity_insight
+                insight_data = {
+                    'prediction_image': insight.prediction_image.url if insight.prediction_image else None,
+                    'actual_image': insight.actual_image.url if insight.actual_image else None,
+                    'prediction_description': insight.prediction_description,
+                    'actual_description': insight.actual_description,
+                    'accuracy_score': insight.accuracy_score,
+                    'analysis_result': insight.analysis_result
+                }
+
+            # Ensure warzone_history is never null
+            warzone_history = trade.warzone_history or [{
+                'value': float(trade.warzone),
+                'changed_at': trade.created_at.isoformat()
+            }]
+
+            data = {
+                "id": trade.index_and_commodity.id,
+                "tradingSymbol": trade.index_and_commodity.tradingSymbol,
+                "exchange": trade.index_and_commodity.exchange,
+                "instrumentName": trade.index_and_commodity.instrumentName,
+                "completed_trade": None,
+                "intraday_trade": {
+                    "id": trade.id,
+                    "trade_type": trade.trade_type,
+                    "status": trade.status,
+                    "plan_type": trade.plan_type,
+                    "warzone": str(trade.warzone),
+                    "image": trade.image.url if trade.image else None,
+                    "warzone_history": warzone_history,
+                    "analysis": analysis_data,
+                    "trade_history": trade_history,
+                    "insight": insight_data,
+                    "completed_at": trade.completed_at.isoformat() if trade.completed_at else None,
+                    "created_at": trade.created_at.isoformat(),
+                    "updated_at": trade.updated_at.isoformat()
+                } if trade.trade_type == 'INTRADAY' else None,
+                "positional_trade": {
+                    "id": trade.id,
+                    "trade_type": trade.trade_type,
+                    "status": trade.status,
+                    "plan_type": trade.plan_type,
+                    "warzone": str(trade.warzone),
+                    "image": trade.image.url if trade.image else None,
+                    "warzone_history": warzone_history,
+                    "analysis": analysis_data,
+                    "trade_history": trade_history,
+                    "insight": insight_data,
+                    "completed_at": trade.completed_at.isoformat() if trade.completed_at else None,
+                    "created_at": trade.created_at.isoformat(),
+                    "updated_at": trade.updated_at.isoformat()
+                } if trade.trade_type == 'POSITIONAL' else None,
+                "created_at": trade.created_at.isoformat()
+            }
+
             logger.info(f"Successfully prepared trade data: {data}")
             return data
         except Exception as e:
@@ -97,7 +173,6 @@ class TradeUpdateBroadcaster:
             logger.info("Successfully completed broadcasting trade update")
         except Exception as e:
             logger.error(f"Error broadcasting trade update: {str(e)}")
-            import traceback
             logger.error(traceback.format_exc())
 
 class NotificationManager:
@@ -135,14 +210,6 @@ class NotificationManager:
         )
         
         trade_content_type = ContentType.objects.get_for_model(Trade)
-        # trade_data = {
-        #     'company': trade.company.trading_symbol,
-        #     'plan_type': trade.plan_type,
-        #     'status': trade.status,
-        #     'instrumentName': trade.company.instrument_type,
-        #     'trade_id': str(trade.id),
-        #     'category': 'stock',
-        # }
         trade_data = {
             'company': trade.index_and_commodity.tradingSymbol,
             'plan_type': trade.plan_type,
@@ -150,6 +217,8 @@ class NotificationManager:
             'instrumentName': trade.index_and_commodity.instrumentName,
             'trade_id': str(trade.id),
             'category': 'index_and_commodity',
+            'tradingSymbol': trade.index_and_commodity.tradingSymbol,
+            'exchange': trade.index_and_commodity.exchange
         }
         if trade.status == 'COMPLETED':
             try:
@@ -299,7 +368,7 @@ def handle_trade_updates(sender, instance, created, **kwargs):
 @receiver(post_save, sender=TradeHistory)
 def handle_trade_history_updates(sender, instance, created, **kwargs):
     """Handle notifications for price target updates"""
-    if created and instance.trade.status == 'ACTIVE':
+    if instance.trade.status == 'ACTIVE':
         notifications = NotificationManager.create_notification(
             instance.trade,
             'PRICE',
@@ -311,6 +380,9 @@ def handle_trade_history_updates(sender, instance, created, **kwargs):
         if notifications:
             transaction.on_commit(
                 lambda: NotificationManager.send_websocket_notifications(notifications)
+            )
+            transaction.on_commit(
+                lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance.trade)
             )
 
 @receiver(post_save, sender=Analysis)
@@ -328,6 +400,9 @@ def handle_analysis_updates(sender, instance, created, **kwargs):
         if notifications:
             transaction.on_commit(
                 lambda: NotificationManager.send_websocket_notifications(notifications)
+            )
+            transaction.on_commit(
+                lambda: TradeUpdateBroadcaster.broadcast_trade_update(instance.trade)
             )
 
 @receiver(post_save, sender=Insight)
@@ -364,3 +439,32 @@ def handle_insight_updates(sender, instance, created, **kwargs):
             transaction.on_commit(
                 lambda: NotificationManager.send_websocket_notifications(notifications)
             )
+
+@receiver(post_save, sender=Trade)
+def create_trade_analysis(sender, instance, created, **kwargs):
+    """Create an Analysis object when a new Trade is created"""
+    if created:
+        try:
+            # Get analysis data from the trade if it exists
+            analysis_data = getattr(instance, '_analysis_data', {})
+            
+            # Create analysis with default values if not provided
+            Analysis.objects.create(
+                trade=instance,
+                bull_scenario=analysis_data.get('bull_scenario', ""),
+                bear_scenario=analysis_data.get('bear_scenario', ""),
+                status=analysis_data.get('status', 'NEUTRAL')
+            )
+            
+            # Initialize warzone_history if it's empty
+            if not instance.warzone_history:
+                instance.warzone_history = [{
+                    'value': float(instance.warzone),
+                    'changed_at': instance.created_at.isoformat()
+                }]
+                instance.save(update_fields=['warzone_history'])
+                
+            logger.info(f"Created analysis and initialized warzone history for trade ID: {instance.id}")
+        except Exception as e:
+            logger.error(f"Error creating analysis for trade ID: {instance.id}: {str(e)}")
+            logger.error(traceback.format_exc())

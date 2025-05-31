@@ -38,7 +38,8 @@ class TradeDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'trade_type', 'status', 'plan_type',
             'warzone', 'image', 'warzone_history',
-            'analysis', 'trade_history', 'insight','completed_at','created_at', 'updated_at'
+            'analysis', 'trade_history', 'insight',
+            'completed_at', 'created_at', 'updated_at'
         ]
 
 class IndexAndCommodityTradesSerializer(serializers.ModelSerializer):

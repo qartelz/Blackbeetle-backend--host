@@ -8,11 +8,16 @@ from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from ..models import Trade, Analysis, IndexAndCommodity
 from ..serializers.trade_related_serializers import TradeSerializer, AnalysisSerializer
+from ..serializers.grouped_trades_serializers import TradeDetailSerializer
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError 
 from ..Filter.index_and_commodity_filter import TradeFilter
 from django.db.models import Q
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 class CustomTradePagination(PageNumberPagination):
@@ -24,7 +29,13 @@ class TradeViewSet(viewsets.ModelViewSet):
     """
     Complete Trade Management System with Flexible Analysis
     """
-    queryset = Trade.objects.select_related('index_and_commodity', 'index_and_commodity_analysis')
+    queryset = Trade.objects.select_related(
+        'index_and_commodity',
+        'index_and_commodity_analysis'
+    ).prefetch_related(
+        'index_and_commodity_history',
+        'index_and_commodity_insight'
+    )
     serializer_class = TradeSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = CustomTradePagination
@@ -70,11 +81,18 @@ class TradeViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         try:
+            # Extract analysis data if provided
+            analysis_data = request.data.pop('analysis', {})
+            
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             
             # Run model validation
             instance = serializer.save()
+            
+            # Attach analysis data to be used by the signal
+            instance._analysis_data = analysis_data
+            
             try:
                 instance.clean()
             except ValidationError as e:
@@ -84,7 +102,15 @@ class TradeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
                 
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Return the trade data in the consistent format
+            trade_data = TradeDetailSerializer(instance).data
+            return Response({
+                "count": 1,
+                "next": None,
+                "previous": None,
+                "results": [trade_data]
+            }, status=status.HTTP_201_CREATED)
+            
         except Exception as e:
             return Response(
                 {"error": str(e)},
@@ -238,34 +264,43 @@ class TradeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            old_status = trade.status
             trade.status = new_status
+            
             if new_status in [Trade.Status.COMPLETED, Trade.Status.CANCELLED]:
                 trade.completed_at = timezone.now()
             
-            # Handle validation explicitly
             try:
-                trade.clean()  # Run model validation
+                # Run model validation
+                trade.clean()
                 trade.save()
                 
+                # Return the updated trade data in the same format as other responses
+                trade_data = TradeDetailSerializer(trade).data
                 return Response({
-                    "status": "success",
-                    "message": "Trade status updated successfully",
-                    "data": {
-                        "new_status": trade.status,
-                        "completed_at": trade.completed_at
-                    }
+                    "count": 1,
+                    "next": None,
+                    "previous": None,
+                    "results": [trade_data]
                 })
                 
             except ValidationError as e:
+                # Restore the old status if validation fails
+                trade.status = old_status
+                trade.completed_at = None if old_status not in [Trade.Status.COMPLETED, Trade.Status.CANCELLED] else trade.completed_at
+                trade.save()
+                
                 return Response(
                     {
                         "status": "error",
                         "message": str(e.messages[0] if isinstance(e.messages, list) else e.messages)
                     },
-                    status=status.HTTP_409_CONFLICT
+                    status=status.HTTP_400_BAD_REQUEST
                 )
                 
         except Exception as e:
+            logger.error(f"Error updating trade status: {str(e)}")
+            logger.error(traceback.format_exc())
             return Response(
                 {
                     "status": "error",
@@ -273,6 +308,7 @@ class TradeViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
     @action(detail=False, methods=['GET'], url_path='available-trades')
     def available_trades(self, request):
         """Get available trade types for specific index"""
@@ -304,7 +340,7 @@ class TradeViewSet(viewsets.ModelViewSet):
                     'positional': None,
                     'index_id': trade.index_and_commodity.id
                 }
-            grouped[symbol][trade.trade_type.lower()] = TradeSerializer(trade).data
+            grouped[symbol][trade.trade_type.lower()] = TradeDetailSerializer(trade).data
         
         return Response(grouped)
 

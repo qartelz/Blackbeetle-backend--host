@@ -1,25 +1,23 @@
 from channels.generic.websocket import AsyncWebsocketConsumer
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
+from django.utils import timezone
 from django.core.cache import cache
-from typing import Dict, List, Optional, Set
+from .models import Trade, Analysis, TradeHistory, Insight
+from apps.subscriptions.models import Subscription
 import json
-from decimal import Decimal
 import logging
 import asyncio
+from decimal import Decimal
 from urllib.parse import parse_qs
-from django.utils import timezone
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.db import transaction
-from apps.subscriptions.models import Subscription
-from .models import Trade, IndexAndCommodity
-from django.db import models
+from typing import Dict, List, Optional, Set
 import traceback
 
 logger = logging.getLogger(__name__)
-
-# Database-specific sync_to_async decorator
-db_sync_to_async = sync_to_async(thread_sensitive=True)
+User = get_user_model()
 
 class DecimalEncoder(json.JSONEncoder):
     """Custom JSON encoder to handle Decimal objects."""
@@ -37,7 +35,7 @@ class IndexAndCommodityUpdateManager:
     async def get_cached_trades(cache_key: str) -> Optional[Dict]:
         """Retrieve cached trade data asynchronously."""
         try:
-            return await sync_to_async(cache.get)(cache_key)
+            return await database_sync_to_async(cache.get)(cache_key)
         except Exception as e:
             logger.error(f"Failed to get cached trades: {str(e)}")
             return None
@@ -46,7 +44,7 @@ class IndexAndCommodityUpdateManager:
     async def set_cached_trades(cache_key: str, data: Dict):
         """Store trade data in the cache asynchronously."""
         try:
-            await sync_to_async(cache.set)(cache_key, data, IndexAndCommodityUpdateManager.CACHE_TIMEOUT)
+            await database_sync_to_async(cache.set)(cache_key, data, IndexAndCommodityUpdateManager.CACHE_TIMEOUT)
         except Exception as e:
             logger.error(f"Failed to set cached trades: {str(e)}")
 
@@ -120,112 +118,35 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         self.cache_timeout = 300
 
     async def connect(self):
-        """Handle WebSocket connection establishment."""
-        if self.connection_retries >= self.MAX_RETRIES:
-            await self.close(code=4007)
-            return
-
+        """Handle WebSocket connection."""
         try:
-            await self.accept()
-            
-            if not await self._authenticate():
-                await self.close(code=4003)
+            self.user = self.scope["user"]
+            if not self.user.is_authenticated:
+                logger.error("Unauthenticated user tried to connect")
+                await self.close()
                 return
 
-            await self._clear_user_cache()
-            
-            self.is_connected = True
-            await self.send_success("connected")
-            
-            if await self._setup_user_group():
-                self._initial_data_task = asyncio.create_task(self.send_initial_data())
-
-        except Exception as e:
-            logger.error(f"Connection error: {str(e)}")
-            self.connection_retries += 1
-            await asyncio.sleep(self.RECONNECT_DELAY)
-            await self.connect()
-
-    async def send_error(self, code: int, extra_info: str = None):
-        """Send an error message to the client."""
-        message = self.ERROR_MESSAGES.get(code, "An unexpected error occurred.")
-        if extra_info:
-            message += f" Details: {extra_info}"
-        await self.send(text_data=json.dumps({
-            "type": "error",
-            "code": code,
-            "message": message
-        }))
-
-    async def send_success(self, event: str, extra_info: str = None):
-        """Send a success message to the client."""
-        message = self.SUCCESS_MESSAGES.get(event, "Operation completed successfully.")
-        if extra_info:
-            message += f" {extra_info}"
-        await self.send(text_data=json.dumps({
-            "type": "success",
-            "event": event,
-            "message": message
-        }))
-
-    async def _authenticate(self) -> bool:
-        """Authenticate the user using a JWT token."""
-        try:
-            token = self.scope['url_route']['kwargs'].get('token')
-            
-            if not token:
-                query_string = self.scope.get('query_string', b'').decode('utf-8')
-                parsed_qs = parse_qs(query_string)
-                token = parsed_qs.get('token', [None])[0] or parsed_qs.get('access_token', [None])[0]
-
-            if not token:
-                await self.send_error(4001)
-                return False
-
-            jwt_auth = JWTAuthentication()
-            validated_token = await sync_to_async(jwt_auth.get_validated_token)(token)
-            self.user = await sync_to_async(jwt_auth.get_user)(validated_token)
-
-            if not self.user or not self.user.is_authenticated:
-                await self.send_error(4003)
-                return False
-
-            # Get active subscription
-            self.subscription = await self._get_active_subscription(self.user)
+            # Get user's subscription
+            self.subscription = await self._get_active_subscription()
             if not self.subscription:
-                await self.send_error(4005)
-                return False
+                logger.error(f"No active subscription found for user {self.user.id}")
+                await self.close()
+                return
 
-            return True
-
-        except (InvalidToken, TokenError) as e:
-            await self.send_error(4002, str(e))
-            return False
-        except Exception as e:
-            logger.error(f"Authentication error: {str(e)}")
-            await self.send_error(4004, str(e))
-            return False
-
-    @db_sync_to_async
-    def _get_active_subscription(self, user):
-        """Get user's active subscription."""
-        today = timezone.now().date()
-        return Subscription.objects.filter(
-            user=user,
-            is_active=True,
-            end_date__gte=today
-        ).first()
-
-    async def _setup_user_group(self) -> bool:
-        """Set up user's group for receiving updates."""
-        try:
+            # Join user's trade updates group
             self.user_group = f"trade_updates_{self.user.id}"
             await self.channel_layer.group_add(self.user_group, self.channel_name)
-            return True
+            await self.accept()
+            logger.info(f"WebSocket connection accepted for user {self.user.id}")
+
+            # Send initial trade data
+            await self.send_initial_trades()
+            logger.info(f"Initial trade data sent to user {self.user.id}")
+
         except Exception as e:
-            logger.error(f"Group setup error: {str(e)}")
-            await self.send_error(4006)
-            return False
+            logger.error(f"Error in WebSocket connection: {str(e)}")
+            logger.error(traceback.format_exc())
+            await self.close()
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
@@ -234,7 +155,181 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         if self._initial_data_task:
             self._initial_data_task.cancel()
 
-    @db_sync_to_async
+    async def trade_update(self, event):
+        """Handle trade update messages."""
+        try:
+            # Get the trade object and format it
+            trade_id = event["data"].get("id")
+            if not trade_id:
+                logger.error("No trade ID provided in update event")
+                return
+
+            trade = await database_sync_to_async(Trade.objects.select_related(
+                'index_and_commodity',
+                'index_and_commodity_analysis',
+                'index_and_commodity_insight'
+            ).prefetch_related(
+                'index_and_commodity_history'
+            ).get)(id=trade_id)
+
+            formatted_trade = await database_sync_to_async(self._format_trade)(trade)
+            if not formatted_trade:
+                logger.error(f"Failed to format trade {trade_id}")
+                return
+
+            response_data = {
+                "type": "trade_update",
+                "data": {
+                    "count": 1,
+                    "next": None,
+                    "previous": None,
+                    "results": [formatted_trade]
+                }
+            }
+            
+            await self.send(text_data=json.dumps(response_data, cls=DecimalEncoder))
+            logger.info(f"Trade update sent to user {self.user.id}")
+        except Exception as e:
+            logger.error(f"Error sending trade update: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    @database_sync_to_async
+    def _get_active_subscription(self):
+        """Get user's active subscription."""
+        return Subscription.objects.filter(
+            user=self.user,
+            is_active=True
+        ).first()
+
+    async def send_initial_trades(self):
+        """Send initial trade data to the client."""
+        try:
+            trades = await self._get_active_trades()
+            formatted_trades = []
+            
+            for trade in trades:
+                trade_data = await database_sync_to_async(self._format_trade)(trade)
+                if trade_data:
+                    formatted_trades.append(trade_data)
+            
+            response_data = {
+                "type": "initial_trades",
+                "data": {
+                    "count": len(formatted_trades),
+                    "next": None,
+                    "previous": None,
+                    "results": formatted_trades
+                }
+            }
+            
+            await self.send(text_data=json.dumps(response_data, cls=DecimalEncoder))
+            logger.info(f"Initial trades sent to user {self.user.id}")
+        except Exception as e:
+            logger.error(f"Error sending initial trades: {str(e)}")
+            logger.error(traceback.format_exc())
+
+    @database_sync_to_async
+    def _get_active_trades(self):
+        """Get all active trades."""
+        return list(Trade.objects.filter(
+            status='ACTIVE'
+        ).select_related(
+            'index_and_commodity',
+            'index_and_commodity_analysis',
+            'index_and_commodity_insight'
+        ).prefetch_related(
+            'index_and_commodity_history'
+        ))
+
+    def _format_trade(self, trade):
+        """Format trade data for sending to client."""
+        try:
+            # Get the index and commodity data
+            index_data = {
+                "id": trade.id,
+                "tradingSymbol": trade.index_and_commodity.tradingSymbol,
+                "exchange": trade.index_and_commodity.exchange,
+                "instrumentName": trade.index_and_commodity.instrumentName,
+                "completed_trade": None
+            }
+
+            # Format trade details
+            trade_details = {
+                "id": trade.id,
+                "trade_type": trade.trade_type,
+                "status": trade.status,
+                "plan_type": trade.plan_type,
+                "warzone": str(trade.warzone),
+                "image": trade.image.url if trade.image else None,
+                "warzone_history": trade.warzone_history or [],
+                "analysis": None,  # Will be updated below
+                "trade_history": [],  # Will be updated below
+                "insight": None,  # Will be updated below
+                "completed_at": trade.completed_at.isoformat() if trade.completed_at else None,
+                "created_at": trade.created_at.isoformat(),
+                "updated_at": trade.updated_at.isoformat()
+            }
+
+            # Get and format analysis data
+            if hasattr(trade, 'index_and_commodity_analysis'):
+                analysis = trade.index_and_commodity_analysis
+                if analysis:
+                    trade_details["analysis"] = {
+                        'bull_scenario': analysis.bull_scenario or "",
+                        'bear_scenario': analysis.bear_scenario or "",
+                        'status': analysis.status,
+                        'completed_at': analysis.completed_at.isoformat() if analysis.completed_at else None,
+                        'created_at': analysis.created_at.isoformat(),
+                        'updated_at': analysis.updated_at.isoformat()
+                    }
+
+            # Get and format trade history
+            if hasattr(trade, 'index_and_commodity_history'):
+                histories = trade.index_and_commodity_history.all()
+                trade_details["trade_history"] = [
+                    {
+                        'buy': str(history.buy),
+                        'target': str(history.target),
+                        'sl': str(history.sl),
+                        'timestamp': history.timestamp.isoformat(),
+                        'risk_reward_ratio': str(history.risk_reward_ratio),
+                        'potential_profit_percentage': str(history.potential_profit_percentage),
+                        'stop_loss_percentage': str(history.stop_loss_percentage)
+                    }
+                    for history in histories
+                ]
+
+            # Get and format insight data
+            if hasattr(trade, 'index_and_commodity_insight'):
+                insight = trade.index_and_commodity_insight
+                if insight:
+                    trade_details["insight"] = {
+                        'prediction_image': insight.prediction_image.url if insight.prediction_image else None,
+                        'actual_image': insight.actual_image.url if insight.actual_image else None,
+                        'prediction_description': insight.prediction_description,
+                        'actual_description': insight.actual_description,
+                        'accuracy_score': insight.accuracy_score,
+                        'analysis_result': insight.analysis_result
+                    }
+
+            # Add trade details to appropriate field based on trade type
+            if trade.trade_type == 'INTRADAY':
+                index_data["intraday_trade"] = trade_details
+                index_data["positional_trade"] = None
+            else:
+                index_data["intraday_trade"] = None
+                index_data["positional_trade"] = trade_details
+
+            index_data["created_at"] = trade.created_at.isoformat()
+            
+            return index_data
+
+        except Exception as e:
+            logger.error(f"Error formatting trade data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+
+    @database_sync_to_async
     def _get_trade_counts(self, bypass_cache=True):
         """Get current trade counts for the user."""
         cache_key = f"index_commodity_counts_{self.user.id}_{self.subscription.id}"
@@ -315,7 +410,7 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
             logger.error(f"Error checking trade limits: {str(e)}")
             return False
 
-    @db_sync_to_async
+    @database_sync_to_async
     def _get_filtered_trade_data_sync(self, bypass_cache=False):
         """Synchronous part of getting filtered trade data."""
         try:
@@ -409,7 +504,7 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         cache_key = f"index_commodity_trades_{self.user.id}"
         
         if not bypass_cache:
-            cached_data = await sync_to_async(cache.get)(cache_key)
+            cached_data = await database_sync_to_async(cache.get)(cache_key)
             if cached_data:
                 return cached_data
 
@@ -457,61 +552,8 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
             "stock_data": sync_data['formatted_new_trades'] + sync_data['formatted_previous_trades']
         }
 
-        await sync_to_async(cache.set)(cache_key, response_data, self.cache_timeout)
+        await database_sync_to_async(cache.set)(cache_key, response_data, self.cache_timeout)
         return response_data
-
-    def _format_trade(self, trade):
-        """Format trade data for sending to client."""
-        return {
-            "id": trade.id,
-            "tradingSymbol": trade.index_and_commodity.tradingSymbol,
-            "exchange": trade.index_and_commodity.exchange,
-            "instrumentName": trade.index_and_commodity.instrumentName,
-            "intraday_trade": self._format_trade_details(trade) if trade.trade_type == 'INTRADAY' else None,
-            "positional_trade": self._format_trade_details(trade) if trade.trade_type == 'POSITIONAL' else None,
-            "created_at": trade.created_at.isoformat()
-        }
-
-    def _format_trade_details(self, trade):
-        """Format trade details."""
-        return {
-            "id": trade.id,
-            "trade_type": trade.trade_type,
-            "status": trade.status,
-            "plan_type": trade.plan_type,
-            "warzone": str(trade.warzone),
-            "image": trade.image.url if trade.image else None,
-            "warzone_history": [
-                {
-                    "value": str(history.value),
-                    "changed_at": history.changed_at.isoformat()
-                }
-                for history in trade.warzone_history_set.all()
-            ] if hasattr(trade, 'warzone_history_set') else [],
-            "analysis": self._format_analysis(trade.analysis.first()) if hasattr(trade, 'analysis') and trade.analysis.exists() else None,
-            "trade_history": [
-                {
-                    "buy": str(history.buy),
-                    "target": str(history.target),
-                    "sl": str(history.sl),
-                    "created_at": history.created_at.isoformat()
-                }
-                for history in trade.trade_history_set.all()
-            ] if hasattr(trade, 'trade_history_set') else []
-        }
-
-    def _format_analysis(self, analysis):
-        """Format analysis data."""
-        if not analysis:
-            return None
-        return {
-            "bull_scenario": analysis.bull_scenario,
-            "bear_scenario": analysis.bear_scenario,
-            "status": analysis.status,
-            "completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None,
-            "created_at": analysis.created_at.isoformat(),
-            "updated_at": analysis.updated_at.isoformat()
-        }
 
     async def send_initial_data(self):
         """Send initial trade data to client."""
@@ -522,96 +564,6 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error sending initial data: {str(e)}")
             await self.send_error(4006)
-
-    async def trade_update(self, event):
-        """Handle trade update events."""
-        try:
-            if not self._is_duplicate_message(event['data']):
-                trade_data = event['data']
-                
-                # Check trade status - only process ACTIVE and COMPLETED trades
-                trade_status = trade_data.get('trade_status')
-                if trade_status not in ['ACTIVE', 'COMPLETED']:
-                    logger.info(f"Ignoring trade update with status {trade_status}")
-                    return
-                
-                # Get user's plan type and accessible plan levels
-                user_plan_type = self.subscription.plan.name
-                accessible_plan_levels = self.trade_manager.get_plan_levels(user_plan_type)
-                
-                # Check if user has access to this trade's plan type
-                trade_plan_type = trade_data.get('plan_type')
-                if trade_plan_type not in accessible_plan_levels:
-                    logger.warning(f"User with plan {user_plan_type} cannot access trade of plan type {trade_plan_type}")
-                    return
-                
-                # Check if this is a new trade
-                trade_timestamp = timezone.datetime.fromisoformat(trade_data['created_at'])
-                is_new_trade = trade_timestamp >= self.subscription.start_date
-                
-                # Check if we can add this trade
-                if not await self._can_add_trade(is_new_trade):
-                    logger.warning(f"Trade limit reached. Ignoring trade update for trade_id: {trade_data.get('trade_id')}")
-                    return
-
-                # Get current trade counts
-                trade_counts = await self._get_trade_counts(bypass_cache=True)
-                plan_limits = self.trade_limits.get(user_plan_type, {})
-
-                # Calculate remaining trades
-                remaining = {
-                    'new': None if plan_limits.get('new') is None else max(0, plan_limits['new'] - trade_counts['new']),
-                    'previous': None if plan_limits.get('previous') is None else max(0, plan_limits['previous'] - trade_counts['previous']),
-                    'total': None if plan_limits.get('total') is None else max(0, plan_limits['total'] - trade_counts['total'])
-                }
-
-                # Add counts to the update message
-                trade_data['counts'] = {
-                    "total_available": {
-                        "new": trade_counts['new'],
-                        "previous": trade_counts['previous'],
-                        "total": trade_counts['total']
-                    },
-                    "shown": trade_counts,
-                    "remaining": remaining,
-                    "limits": {
-                        "new": plan_limits.get('new'),
-                        "previous": plan_limits.get('previous'),
-                        "total": plan_limits.get('total')
-                    }
-                }
-                
-                await self.send(text_data=json.dumps(trade_data, cls=DecimalEncoder))
-                
-                # Schedule cleanup of message ID after deduplication window
-                message_id = trade_data.get('trade_id')
-                if message_id:
-                    asyncio.create_task(self._cleanup_message_id(message_id))
-        except Exception as e:
-            logger.error(f"Error handling trade update: {str(e)}")
-            logger.error(traceback.format_exc())
-
-    async def _cleanup_message_id(self, message_id):
-        """Clean up processed message ID after deduplication window."""
-        await asyncio.sleep(self.MESSAGE_DEDUPLICATION_TIMEOUT)
-        self.processed_messages.discard(message_id)
-
-    def _is_duplicate_message(self, trade_data):
-        """Check if message is a duplicate within deduplication window."""
-        message_id = trade_data.get('trade_id')
-        if not message_id:
-            return False
-            
-        if message_id in self.processed_messages:
-            return True
-            
-        self.processed_messages.add(message_id)
-        return False
-
-    async def _clear_user_cache(self):
-        """Clear user's cached data."""
-        cache_key = f"index_commodity_trades_{self.user.id}"
-        await sync_to_async(cache.delete)(cache_key)
 
     async def receive(self, text_data):
         """Handle incoming WebSocket messages."""
