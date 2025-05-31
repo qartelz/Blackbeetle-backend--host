@@ -16,7 +16,8 @@ from .views import (
     AvailableB2BPlansView,
     AdminOrderListCreateView,
     AdminOrderDetailView,
-    AdminOrderOfflinePaymentView
+    AdminOrderOfflinePaymentView,
+    GrantFreeTrialView
 )
 
 
@@ -36,6 +37,7 @@ urlpatterns = [
     path('subscriptions/', SubscriptionListView.as_view(), name='subscription-list'),
     path('subscriptions/<int:pk>/', SubscriptionDetailView.as_view(), name='subscription-detail'),
     path('subscriptions/<int:pk>/cancel/', CancelSubscriptionView.as_view(), name='cancel-subscription'),
+    path('grant-free-trial/<str:user_id>/', GrantFreeTrialView.as_view(), name='grant-free-trial'),
 
     # New admin-only URL patterns
     # path('admin/orders/create/', AdminOrderCreateView.as_view(), name='admin-order-create'),
