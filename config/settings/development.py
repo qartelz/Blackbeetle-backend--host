@@ -20,17 +20,17 @@ from .base import *
 #postgresql://postgres:ZDlJpsEBJcUYNqgvVGLwKRrxiDkKqlUZ@monorail.proxy.rlwy.net:13906/railway
 
 # postgresql://postgres:dokMzWIoIdTblnxAqKHlbZAaRxOTCrXg@roundhouse.proxy.rlwy.net:36356/railway
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'railway',                                      #################  this is for production################
-#         'USER': 'postgres',
-#         'PASSWORD': 'ZDlJpsEBJcUYNqgvVGLwKRrxiDkKqlUZ',
-#         'HOST': 'monorail.proxy.rlwy.net',  
-#         'PORT': '13906',
-#         'CONN_MAX_AGE': 300,
-#     }
-# }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'railway',                                      #################  this is for production################
+        'USER': 'postgres',
+        'PASSWORD': 'ZDlJpsEBJcUYNqgvVGLwKRrxiDkKqlUZ',
+        'HOST': 'monorail.proxy.rlwy.net',  
+        'PORT': '13906',
+        'CONN_MAX_AGE': 300,
+    }
+}
 
 
 # DATABASES = {
@@ -45,17 +45,17 @@ from .base import *
 #     }
 # }
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'railway',
-        'USER': 'postgres',
-        'PASSWORD': 'nokbbbXgIDvLZYDXpOEnOpOblnuxibOu',
-        'HOST': 'maglev.proxy.rlwy.net',  
-        'PORT': '25499',
-        'CONN_MAX_AGE': 300,
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'railway',
+#         'USER': 'postgres',
+#         'PASSWORD': 'nokbbbXgIDvLZYDXpOEnOpOblnuxibOu',
+#         'HOST': 'maglev.proxy.rlwy.net',  
+#         'PORT': '25499',
+#         'CONN_MAX_AGE': 300,
+#     }
+# }
 
 
 # DATABASES = {
