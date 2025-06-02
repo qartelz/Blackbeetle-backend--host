@@ -74,7 +74,8 @@ class GroupedTradeViewSet(viewsets.ReadOnlyModelViewSet):
         plan_filters = {
             'BASIC': ['BASIC'],
             'PREMIUM': ['BASIC', 'PREMIUM'],
-            'SUPER_PREMIUM': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM']
+            'SUPER_PREMIUM': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM'],
+            'FREE_TRIAL': ['BASIC', 'PREMIUM', 'SUPER_PREMIUM']
         }
         
         allowed_plans = plan_filters.get(plan_type, [])
