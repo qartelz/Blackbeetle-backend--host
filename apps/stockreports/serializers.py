@@ -36,8 +36,8 @@ class StockReportSerializer(serializers.ModelSerializer):
         """
         if value:
             # Check file size (max 10MB)
-            if value.size > 10 * 1024 * 1024:
-                raise serializers.ValidationError("PDF file size cannot exceed 10MB")
+            if value.size > 100 * 1024 * 1024:
+                raise serializers.ValidationError("PDF file size cannot exceed 100MB")
             
             # Check file type
             if not value.name.lower().endswith('.pdf'):
