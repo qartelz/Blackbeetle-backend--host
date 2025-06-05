@@ -243,8 +243,7 @@ class NotificationManager:
                 trade_id=trade.id,
                 is_redirectable=True,
                 detailed_message=detailed_message,
-                # related_url=f"/trades/{trade.id}",
-                related_url="Kichu",
+                related_url=f"/trades/{trade.id}",
 
                 trade_data=trade_data
             )
