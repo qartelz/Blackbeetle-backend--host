@@ -28,6 +28,7 @@ class TradeUpdateBroadcaster:
                 
             logger.info(f"Preparing trade data for trade ID: {trade.id}, Status: {trade.status}")
             message_type = "trade_completed" if trade.status == 'COMPLETED' else "trade_update"
+            print(trade.id,'trade.index_and_commodity.id>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             
             # Get analysis data - ensure it's never null
             analysis_data = {
@@ -83,7 +84,7 @@ class TradeUpdateBroadcaster:
             }]
 
             data = {
-                "id": trade.index_and_commodity.id,
+                "id": trade.id,
                 "tradingSymbol": trade.index_and_commodity.tradingSymbol,
                 "exchange": trade.index_and_commodity.exchange,
                 "instrumentName": trade.index_and_commodity.instrumentName,
@@ -162,7 +163,7 @@ class TradeUpdateBroadcaster:
             # Broadcast to each eligible user's channel
             for subscription in subscriptions:
                 user_group = f"trade_updates_{subscription.user.id}"
-                logger.info(f"Broadcasting to user group: {user_group}")
+                # logger.info(f"Broadcasting to user group: {user_group}")
                 async_to_sync(channel_layer.group_send)(
                     user_group,
                     {
@@ -242,7 +243,9 @@ class NotificationManager:
                 trade_id=trade.id,
                 is_redirectable=True,
                 detailed_message=detailed_message,
-                related_url=f"/trades/{trade.id}",
+                # related_url=f"/trades/{trade.id}",
+                related_url="Kichu",
+
                 trade_data=trade_data
             )
             notifications.append(notification)
@@ -253,7 +256,7 @@ class NotificationManager:
     def send_websocket_notifications(notifications):
         """Send notifications through websocket"""
         channel_layer = get_channel_layer()
-        print('send_websocket_notifications>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
+        # print('send_websocket_notifications>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
         
         for notification in notifications:
             payload = {
@@ -271,7 +274,7 @@ class NotificationManager:
                     'trade_data': notification.trade_data
                 }
             }
-            print('payload>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
+            # print(payload,'payload>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             
             async_to_sync(channel_layer.group_send)(
                 f"notification_updates_{notification.recipient.id}",

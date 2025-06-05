@@ -160,6 +160,7 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         try:
             # Get the trade object and format it
             trade_id = event["data"].get("id")
+            print(trade_id,'trade_id>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             if not trade_id:
                 logger.error("No trade ID provided in update event")
                 return
@@ -171,8 +172,9 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
             ).prefetch_related(
                 'index_and_commodity_history'
             ).get)(id=trade_id)
-
+            print(trade,'trade>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             formatted_trade = await database_sync_to_async(self._format_trade)(trade)
+            print(formatted_trade,'formatted_trade>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             if not formatted_trade:
                 logger.error(f"Failed to format trade {trade_id}")
                 return
@@ -213,7 +215,7 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
                     formatted_trades.append(trade_data)
             
             response_data = {
-                "type": "initial_trades",
+                "type": "initial_trades_index_and_commodity",
                 "data": {
                     "count": len(formatted_trades),
                     "next": None,

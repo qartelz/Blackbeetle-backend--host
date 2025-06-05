@@ -165,6 +165,7 @@ class BaseConsumer(AsyncWebsocketConsumer):
         """Send initial data - override in subclasses"""
         # This should be implemented by subclasses
         raise NotImplementedError("Subclasses must implement send_initial_data")
+        
 
     async def _heartbeat_monitor(self) -> None:
         """Send periodic heartbeats to keep connection alive"""
@@ -317,7 +318,9 @@ class NotificationConsumer(BaseConsumer):
                 return
                 
             # Get user's unread notifications
+            """ This actually sends the intial unread notification and it is working fine we just commented it because we dont want to increase the work load for server as it"""
             notifications = await self._get_unread_notifications()
+            
             
             data = {
                 'notifications': notifications,

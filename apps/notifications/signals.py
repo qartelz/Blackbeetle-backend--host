@@ -226,6 +226,17 @@ class NotificationManager:
         )
         
         trade_content_type = ContentType.objects.get_for_model(Trade)
+        trade_data = {
+            'company': trade.company.display_name,
+            'plan_type': trade.plan_type,
+            'status': trade.status,
+            'instrumentName': trade.company.script_name,
+            'trade_id': str(trade.id),
+            'category': "Equity",
+            'tradingSymbol': trade.company.instrument_type,
+            'exchange': trade.company.exchange
+        }
+        print(trade_data,'trade_data>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
         
         notifications = []
         for user in eligible_users:
@@ -239,7 +250,7 @@ class NotificationManager:
                         ).update(is_redirectable=False)
                     except DatabaseError as e:
                         logger.error(f"Database error updating redirectable status: {e}")
-
+                
                 notification = Notification.objects.create(
                     recipient=user,
                     notification_type=notification_type,
@@ -250,7 +261,8 @@ class NotificationManager:
                     trade_status=trade.status,
                     is_redirectable=True,
                     trade_id=trade.id,
-                    related_url=f"/trades/{trade.id}"
+                    related_url=f"/trades/{trade.id}",
+                    trade_data=trade_data
                 )
                 notifications.append(notification)
                 logger.info(f"Created notification {notification.id} for user {user.id} about trade {trade.id}")

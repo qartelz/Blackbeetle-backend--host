@@ -8,6 +8,7 @@ from .models import Notification
 from django.db.models import Q, OuterRef, Subquery
 from apps.trades.models import Trade, Company
 from apps.subscriptions.models import Subscription
+from apps.indexAndCommodity.models import IndexAndCommodity
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,6 @@ class NotificationViewSet(viewsets.ModelViewSet):
             is_active=True,
             end_date__gte=timezone.now()
         ).first()
-        
         # Start with all notifications for this user
         base_queryset = Notification.objects.filter(
             recipient=user
@@ -46,7 +46,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
             ).order_by('-created_at')
         
         # For SUPER_PREMIUM and FREE_TRIAL - return all notifications
-        if subscription.plan.name in ['SUPER_PREMIUM', 'FREE_TRIAL']:
+        if subscription.plan.name in ['SUPER_PREMIUM', 'FREE_TRIAL','BASIC', 'PREMIUM']:
             return base_queryset.order_by('-created_at')
         
         # For other subscriptions, get accessible trades based on plan type
@@ -92,6 +92,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
         # Filter based on read status if specified
         is_read = request.query_params.get('is_read')
         queryset = self.get_queryset()
+        print(queryset.values('trade_data'),'queryset>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
         
         if is_read is not None:
             is_read = is_read.lower() == 'true'
@@ -120,8 +121,12 @@ class NotificationViewSet(viewsets.ModelViewSet):
             
             # Enhance serialized data with trade information
             enhanced_data = self._enhance_notification_data(serializer.data, trade_info)
+            # print(enhanced_data,'enhanced_data>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
+            # print(serializer.data,'serializer.data>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
+            print(trade_info,'trade_info>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             
             response = self.get_paginated_response(enhanced_data)
+            # print(response,'response>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
             response.data['unread_count'] = unread_count
             return response
         
@@ -129,11 +134,28 @@ class NotificationViewSet(viewsets.ModelViewSet):
         
         # Enhance serialized data with trade information
         enhanced_data = self._enhance_notification_data(serializer.data, trade_info)
+        # print(enhanced_data,'enhanced_data>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
         
         return Response({
             'results': enhanced_data,
             'unread_count': unread_count
         })
+    
+    # def _enhance_notification_data(self, data, trade_info):
+        # """Add trading symbol and instrument name to notification data"""
+        # enhanced_data = []
+        
+        # for item in data:
+        #     trade_id = item.get('trade_id')
+        #     if trade_id and trade_id in trade_info:
+        #         # Add trading symbol and instrument name
+        #         item['tradingSymbol'] = trade_info[trade_id]['tradingSymbol']
+        #         item['instrumentName'] = trade_info[trade_id]['instrumentName']
+        #         # item['tradingSymbol'] = "xxx"
+        #         # item['instrumentName'] = "yyy"
+        #     enhanced_data.append(item)
+            
+        # return enhanced_data
     
     def _enhance_notification_data(self, data, trade_info):
         """Add trading symbol and instrument name to notification data"""
@@ -141,15 +163,38 @@ class NotificationViewSet(viewsets.ModelViewSet):
         
         for item in data:
             trade_id = item.get('trade_id')
-            if trade_id and trade_id in trade_info:
-                # Add trading symbol and instrument name
-                item['tradingSymbol'] = trade_info[trade_id]['tradingSymbol']
-                item['instrumentName'] = trade_info[trade_id]['instrumentName']
+            trade_data = item.get('trade_data')
+
+            if not trade_data:
+                # If trade_data is None, assume it's Equity (or default fallback)
+                if trade_id and trade_id in trade_info:
+                    item['tradingSymbol'] = trade_info[trade_id]['tradingSymbol']
+                    item['instrumentName'] = trade_info[trade_id]['instrumentName']
             
+            elif trade_data.get('category') == 'Equity':
+                if trade_id and trade_id in trade_info:
+                    item['tradingSymbol'] = trade_info[trade_id]['tradingSymbol']
+                    item['instrumentName'] = trade_info[trade_id]['instrumentName']
+
+            elif trade_data.get('category') == 'index_and_commodity':
+                # Manually fetch IndexAndCommodity data based on trade_data['tradingSymbol']
+                try:
+                    symbol = trade_data.get('tradingSymbol')
+                    index_obj = IndexAndCommodity.objects.get(tradingSymbol=symbol)
+                    item['tradingSymbol'] = index_obj.tradingSymbol
+                    item['instrumentName'] = index_obj.instrumentName
+                except IndexAndCommodity.DoesNotExist:
+                    item['tradingSymbol'] = 'N/A'
+                    item['instrumentName'] = 'N/A'
+            
+            else:
+                # Default fallback
+                item['tradingSymbol'] = 'UNKNOWN'
+                item['instrumentName'] = 'UNKNOWN'
+
             enhanced_data.append(item)
-            
+
         return enhanced_data
-    
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
         """Mark a single notification as read"""
@@ -185,6 +230,8 @@ class NotificationViewSet(viewsets.ModelViewSet):
                 trade = Trade.objects.select_related('company').get(id=notification.trade_id)
                 response_data['tradingSymbol'] = trade.company.trading_symbol
                 response_data['instrumentName'] = trade.company.instrument_type
+                # response_data['instrumentName'] = "xxx"
+
             except Trade.DoesNotExist:
                 pass
                 
