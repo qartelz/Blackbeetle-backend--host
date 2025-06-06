@@ -84,19 +84,29 @@ class NotificationManager:
             
             # Format the trade
             formatted_trade = NotificationManager._format_trade(trade)
-            
-            # Create company data structure
-            company_data = {
-                'id': company.id,
+            trade_data = {
+                'company': company.display_name,
+                'plan_type': trade.plan_type,
+                'status': trade.status,
+                'instrumentName': company.instrument_type,
+                'trade_id': str(trade.id),
+                'category': 'Equity',
                 'tradingSymbol': company.trading_symbol,
-                'exchange': company.exchange,
-                'instrumentName': company.instrument_type,  # You might want to map this like in trade consumer
-                'intraday_trade': formatted_trade if trade.trade_type == 'INTRADAY' else None,
-                'positional_trade': formatted_trade if trade.trade_type == 'POSITIONAL' else None,
-                'created_at': trade.created_at.isoformat()
+                'exchange': company.exchange
             }
             
-            return company_data
+            # Create company data structure
+            # company_data = {
+            #     'id': company.id,
+            #     'tradingSymbol': company.trading_symbol,
+            #     'exchange': company.exchange,
+            #     'instrumentName': company.instrument_type,  # You might want to map this like in trade consumer
+            #     'intraday_trade': formatted_trade if trade.trade_type == 'INTRADAY' else None,
+            #     'positional_trade': formatted_trade if trade.trade_type == 'POSITIONAL' else None,
+            #     'created_at': trade.created_at.isoformat()
+            # }
+            
+            return trade_data
             
         except Exception as e:
             logger.error(f"Error formatting company data for trade {trade.id}: {str(e)}")
@@ -335,17 +345,16 @@ class NotificationManager:
                         'trade_status': notification.trade_status,
                         'trade_id': notification.trade_id,
                         'is_redirectable': notification.is_redirectable,
-                        'data': {
-                            'updated_company': updated_company,
-                            'subscription': {
-                                'plan': subscription.plan.name,
-                                'start_date': subscription.start_date.isoformat(),
-                                'end_date': subscription.end_date.isoformat(),
-                                'limits': limits,
-                                'current': trade_counts,
-                                'remaining': remaining
-                            }
-                        }
+                        'trade_data': updated_company,
+                            # 'subscription': {
+                            #     'plan': subscription.plan.name,
+                            #     'start_date': subscription.start_date.isoformat(),
+                            #     'end_date': subscription.end_date.isoformat(),
+                            #     'limits': limits,
+                            #     'current': trade_counts,
+                            #     'remaining': remaining
+                            # }
+                        
                     }
                 }
                 

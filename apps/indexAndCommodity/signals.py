@@ -230,7 +230,7 @@ class NotificationManager:
             except DatabaseError as e:
                 # Log the error or handle it as needed
                 print(f"Database error occurred: {e}")
-        
+        # message_type = "indexandcommodity_completed" if notifications.trade_status == 'COMPLETED' else "indexandcommodity_update"
         notifications = []
         for user in eligible_users:
             notification = Notification.objects.create(
@@ -238,6 +238,7 @@ class NotificationManager:
                 notification_type=notification_type,
                 content_type=trade_content_type,
                 object_id=trade.id,
+                # message_type = "index and commodity updates",
                 short_message=short_message,
                 trade_status=trade.status,
                 trade_id=trade.id,
