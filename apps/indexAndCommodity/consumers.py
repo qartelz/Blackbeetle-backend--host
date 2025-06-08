@@ -203,16 +203,52 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
             is_active=True
         ).first()
 
+    # async def send_initial_trades(self):
+    #     """Send initial trade data to the client."""
+    #     try:
+    #         trades = await self._get_active_trades()
+    #         formatted_trades = []
+            
+    #         for trade in trades:
+    #             trade_data = await database_sync_to_async(self._format_trade)(trade)
+    #             if trade_data:
+    #                 formatted_trades.append(trade_data)
+            
+    #         response_data = {
+    #             "type": "initial_trades_index_and_commodity",
+    #             "data": {
+    #                 "count": len(formatted_trades),
+    #                 "next": None,
+    #                 "previous": None,
+    #                 "results": formatted_trades
+    #             }
+    #         }
+            
+    #         await self.send(text_data=json.dumps(response_data, cls=DecimalEncoder))
+    #         logger.info(f"Initial trades sent to user {self.user.id}")
+    #     except Exception as e:
+    #         logger.error(f"Error sending initial trades: {str(e)}")
+    #         logger.error(traceback.format_exc())
     async def send_initial_trades(self):
-        """Send initial trade data to the client."""
+        """Send initial trade data to the client with combined trades by symbol."""
         try:
             trades = await self._get_active_trades()
-            formatted_trades = []
+            
+            # Group trades by trading symbol and exchange
+            trades_by_symbol = {}
             
             for trade in trades:
-                trade_data = await database_sync_to_async(self._format_trade)(trade)
-                if trade_data:
-                    formatted_trades.append(trade_data)
+                key = f"{trade.index_and_commodity.tradingSymbol}_{trade.index_and_commodity.exchange}"
+                if key not in trades_by_symbol:
+                    trades_by_symbol[key] = []
+                trades_by_symbol[key].append(trade)
+            
+            formatted_trades = []
+            
+            for symbol_trades in trades_by_symbol.values():
+                combined_trade = await database_sync_to_async(self._combine_trades)(symbol_trades)
+                if combined_trade:
+                    formatted_trades.append(combined_trade)
             
             response_data = {
                 "type": "initial_trades_index_and_commodity",
@@ -229,6 +265,111 @@ class IndexAndCommodityUpdatesConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error sending initial trades: {str(e)}")
             logger.error(traceback.format_exc())
+
+    def _combine_trades(self, trades):
+        """Combine multiple trades for the same symbol into a single response."""
+        if not trades:
+            return None
+        
+        # Use the first trade as base for common fields
+        base_trade = trades[0]
+        
+        # Find positional and intraday trades by checking trade_type
+        positional_trade = None
+        intraday_trade = None
+        
+        for trade in trades:
+            if trade.trade_type == 'POSITIONAL':
+                positional_trade = trade
+            elif trade.trade_type == 'INTRADAY':
+                intraday_trade = trade
+        
+        # Use the earliest creation date
+        earliest_created_at = min(trade.created_at for trade in trades)
+        
+        # Format the combined trade
+        trade_data = {
+            "id": base_trade.id,
+            "tradingSymbol": base_trade.index_and_commodity.tradingSymbol,
+            "exchange": base_trade.index_and_commodity.exchange,
+            "instrumentName": base_trade.index_and_commodity.instrumentName,
+            "completed_trade": None,  # Handle completed trades if needed
+            "intraday_trade": self._format_trade_details(intraday_trade) if intraday_trade else None,
+            "positional_trade": self._format_trade_details(positional_trade) if positional_trade else None,
+            "created_at": earliest_created_at.isoformat()
+        }
+        
+        return trade_data
+
+    def _format_trade_details(self, trade):
+        """Format individual trade details for either positional or intraday."""
+        if not trade:
+            return None
+        
+        try:
+            # Base trade details
+            trade_details = {
+                "id": trade.id,
+                "trade_type": trade.trade_type,
+                "status": trade.status,
+                "plan_type": trade.plan_type,
+                "warzone": str(trade.warzone),
+                "image": trade.image.url if trade.image else None,
+                "warzone_history": trade.warzone_history or [],
+                "analysis": None,
+                "trade_history": [],
+                "insight": None,
+                "completed_at": trade.completed_at.isoformat() if trade.completed_at else None,
+                "created_at": trade.created_at.isoformat(),
+                "updated_at": trade.updated_at.isoformat()
+            }
+
+            # Get and format analysis data
+            if hasattr(trade, 'index_and_commodity_analysis') and trade.index_and_commodity_analysis:
+                analysis = trade.index_and_commodity_analysis
+                trade_details["analysis"] = {
+                    'bull_scenario': analysis.bull_scenario or "",
+                    'bear_scenario': analysis.bear_scenario or "",
+                    'status': analysis.status,
+                    'completed_at': analysis.completed_at.isoformat() if analysis.completed_at else None,
+                    'created_at': analysis.created_at.isoformat(),
+                    'updated_at': analysis.updated_at.isoformat()
+                }
+
+            # Get and format trade history
+            if hasattr(trade, 'index_and_commodity_history'):
+                histories = trade.index_and_commodity_history.all()
+                trade_details["trade_history"] = [
+                    {
+                        'buy': str(history.buy),
+                        'target': str(history.target),
+                        'sl': str(history.sl),
+                        'timestamp': history.timestamp.isoformat(),
+                        'risk_reward_ratio': str(history.risk_reward_ratio),
+                        'potential_profit_percentage': str(history.potential_profit_percentage),
+                        'stop_loss_percentage': str(history.stop_loss_percentage)
+                    }
+                    for history in histories
+                ]
+
+            # Get and format insight data
+            if hasattr(trade, 'index_and_commodity_insight') and trade.index_and_commodity_insight:
+                insight = trade.index_and_commodity_insight
+                trade_details["insight"] = {
+                    'prediction_image': insight.prediction_image.url if insight.prediction_image else None,
+                    'actual_image': insight.actual_image.url if insight.actual_image else None,
+                    'prediction_description': insight.prediction_description,
+                    'actual_description': insight.actual_description,
+                    'accuracy_score': insight.accuracy_score,
+                    'analysis_result': insight.analysis_result
+                }
+
+            return trade_details
+
+        except Exception as e:
+            logger.error(f"Error formatting trade details: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
 
     @database_sync_to_async
     def _get_active_trades(self):
