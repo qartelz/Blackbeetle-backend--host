@@ -30,19 +30,31 @@ class IndexAndCommodityViewSet(viewsets.ModelViewSet):
         
         return queryset
 
+    # def create(self, request, *args, **kwargs):
+    #     try:
+    #         print("Heloo Index")
+    #         serializer = self.get_serializer(data=request.data)
+    #         serializer.is_valid(raise_exception=True)
+    #         print(serializer.data,"serializer >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+    #         self.perform_create(serializer)
+    #         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    #     except Exception as e:
+    #         return Response(
+    #             {"error": str(e)},
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
     def create(self, request, *args, **kwargs):
-        try:
-            print("Heloo Index")
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            print(serializer.data,"serializer >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-            self.perform_create(serializer)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        print("Heloo Index")
+        serializer = self.get_serializer(data=request.data)
+        
+        if not serializer.is_valid():
+            print("Serializer Errors >>>", serializer.errors)  # 👈 ADD THIS
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        print(serializer.validated_data, "serializer >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
     def update(self, request, *args, **kwargs):
         try:
